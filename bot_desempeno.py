@@ -9,9 +9,9 @@ import os
 
 print(">>> Iniciando bot...")
 
-# ==================== CONFIGURACIÓN (TEMPORAL) ====================
-TOKEN = "PEGA_AQUÍ_TU_TOKEN_DEL_BOT"
-CHANNEL_ID = TU_CHANNEL_ID_AQUÍ          # Ejemplo: 123456789012345678
+# ==================== CONFIGURACIÓN ====================
+TOKEN = "MTUxNDMzOTI2MDU1MDA5MDc1Mg.GPXO0E.qKnaJkh32THdjdnNjGLRkJdxR47oYWp0mo2xwY"
+CHANNEL_ID = 1513487622800937141
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -42,7 +42,7 @@ RONALD_QUESTIONS = [
     "4. ¿Leomar J. logró la coincidencia del inventario físico de San Cristóbal con el sistema hoy?",
     "5. ¿José P. logró la coincidencia del inventario físico de San Cristóbal con el sistema hoy?",
     "6. ¿La ruta de reparto inició antes de las 9:30 a.m. hoy?",
-    "7. ¿Cuántos viajes solo para cobrar se realizados hoy?",
+    "7. ¿Cuántos viajes solo para cobrar se realizaron hoy?",
     "8. ¿La ruta de Leomar, según el GPS, coincide con los puntos de la ruta de ventas y los clientes nuevos visitados hoy?",
     "9. ¿La ruta de José P., según el GPS, coincide con los puntos de la ruta de ventas y los clientes nuevos visitados hoy?",
     "10. ¿Cuántos clientes nuevos visitó Leomar hoy?",
