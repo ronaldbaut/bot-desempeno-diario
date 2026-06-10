@@ -7,6 +7,8 @@ import json
 from datetime import datetime
 import os
 
+print(">>> Iniciando bot...")   # <-- Línea para forzar nuevo build
+
 # ==================== CONFIGURACIÓN SEGURA ====================
 TOKEN = os.getenv("TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
