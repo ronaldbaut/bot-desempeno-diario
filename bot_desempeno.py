@@ -9,15 +9,30 @@ import os
 
 print(">>> Iniciando bot...")
 
-# ==================== CONFIGURACIÓN CON VARIABLES DE ENTORNO ====================
+# ==================== DEBUG DE VARIABLES ====================
+print("DEBUG: TOKEN existe?", "SÍ" if os.getenv("TOKEN") else "NO")
+print("DEBUG: CHANNEL_ID raw =", os.getenv("CHANNEL_ID"))
+print("DEBUG: Todas las variables:", dict(os.environ))
+
+# ==================== CONFIGURACIÓN ====================
 TOKEN = os.getenv("TOKEN")
-CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
+if not TOKEN:
+    print("ERROR: No se encontró la variable TOKEN")
+    exit(1)
+
+try:
+    CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
+except (TypeError, ValueError):
+    print("ERROR: CHANNEL_ID no es un número válido o está vacío")
+    exit(1)
 
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 reports = {}
+
+# (el resto del código es igual)
 
 # ==================== PREGUNTAS TANIA ====================
 TANIA_QUESTIONS = {
