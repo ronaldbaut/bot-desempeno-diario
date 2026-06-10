@@ -9,9 +9,9 @@ import os
 
 print(">>> Iniciando bot...")
 
-# ==================== CONFIGURACIÓN ====================
-TOKEN = "MTUxNDMzOTI2MDU1MDA5MDc1Mg.GPXO0E.qKnaJkh32THdjdnNjGLRkJdxR47oYWp0mo2xwY"
-CHANNEL_ID = 1513487622800937141
+# ==================== CONFIGURACIÓN CON VARIABLES DE ENTORNO ====================
+TOKEN = os.getenv("TOKEN")
+CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 
 intents = discord.Intents.default()
 intents.message_content = True
