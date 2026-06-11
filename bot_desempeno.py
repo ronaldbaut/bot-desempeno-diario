@@ -242,18 +242,3 @@ async def reporte_ronald(interaction: discord.Interaction):
 
 # ==================== INICIO DEL BOT ====================
 bot.run(TOKEN)
-
-Cómo funciona la cancelación:
-• En cualquier momento mientras el bot está preguntando, el usuario puede escribir:
-  • cancelar reporte
-  • cancelar
-  • cancel
-  • detener
-  • parar
-  • abortar
-• El bot responde: “✅ Reporte cancelado.” y borra el progreso actual.
-• Queda listo para que inicies un nuevo reporte con los botones o con /reporte-tania / /reporte-ronald.
-
-Pega el código completo, sube los cambios y redeploya en Railway.
-
-¿Quieres que agregue alguna otra frase de cancelación o algún mensaje adicional? Dime y te lo actualizo listo para copiar y pegar.
