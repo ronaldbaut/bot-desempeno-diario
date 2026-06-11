@@ -27,6 +27,14 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 reports = {}
 
+# Frases para cancelar el reporte (sin importar mayúsculas/minúsculas)
+CANCEL_PHRASES = {"cancelar reporte", "cancelar", "cancel", "detener", "parar", "abortar", "cancelarreporte"}
+
+class ReporteCancelado(Exception):
+    """Excepción para indicar que el usuario canceló el reporte."""
+    pass
+
+
 # ==================== PREGUNTAS TANIA ====================
 TANIA_QUESTIONS = {
     "alistamiento": "¿Las personas que alistaron los pedidos ayer en la noche para llevarlos hoy en la mañana, lo hicieron correctamente sin errores importantes?",
@@ -69,6 +77,21 @@ class DailyReportView(discord.ui.View):
     @discord.ui.button(label="Iniciar Reporte Ronald", style=discord.ButtonStyle.primary, custom_id="daily_ronald_v1")
     async def ronald_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await start_report(interaction, "ronald")
+
+
+# ==================== HELPER PARA ESPERAR RESPUESTA CON CANCELACIÓN ====================
+async def obtener_respuesta(channel, user):
+    """Espera una respuesta del usuario. Si dice 'cancelar reporte' lanza ReporteCancelado."""
+    msg = await bot.wait_for("message", check=lambda m: m.author == user and m.channel == channel)
+    contenido = msg.content.strip().lower()
+
+    if contenido in CANCEL_PHRASES:
+        await channel.send("✅ **Reporte cancelado.**\nPuedes iniciar uno nuevo cuando quieras usando los botones del mensaje diario o los comandos `/reporte-tania` y `/reporte-ronald`.")
+        if user.id in reports:
+            del reports[user.id]
+        raise ReporteCancelado()
+
+    return msg
 
 
 # ==================== TAREA DIARIA ====================
@@ -127,42 +150,46 @@ async def start_report(interaction, team):
     reports[user.id] = report_data
 
     try:
-        await interaction.followup.send(f"📋 **Reporte {team.upper()} iniciado** por {user.mention}")
+        await interaction.followup.send(f"📋 **Reporte {team.upper()} iniciado** por {user.mention}\n\n_Escribe **cancelar reporte** en cualquier momento para detenerlo._")
     except:
         pass
 
     channel = interaction.channel
 
-    if team == "tania":
-        await ask_tania_questions(channel, user)
-    else:
-        await ask_ronald_questions(channel, user)
+    try:
+        if team == "tania":
+            await ask_tania_questions(channel, user)
+        else:
+            await ask_ronald_questions(channel, user)
+    except ReporteCancelado:
+        # El usuario canceló → ya se le avisó y se limpió el diccionario
+        return
 
 
 async def ask_tania_questions(channel, user):
     data = reports[user.id]
 
     await channel.send(f"**1.** {TANIA_QUESTIONS['alistamiento']}")
-    msg = await bot.wait_for("message", check=lambda m: m.author == user and m.channel == channel)
+    msg = await obtener_respuesta(channel, user)
     data["answers"]["alistamiento"] = msg.content
 
     await channel.send(f"**2.** {TANIA_QUESTIONS['produccion']}")
-    msg = await bot.wait_for("message", check=lambda m: m.author == user and m.channel == channel)
+    msg = await obtener_respuesta(channel, user)
     hubo_produccion = msg.content.lower() in ["sí", "si", "yes", "1"]
 
     if hubo_produccion:
         keys = ["licuadas", "protocolo_batidoras", "cambios_agua", "tiempo_produccion", "implementos", "envasado", "asistencia"]
         for i, key in enumerate(keys, 3):
             await channel.send(f"**{i}.** {TANIA_QUESTIONS[key]}")
-            msg = await bot.wait_for("message", check=lambda m: m.author == user and m.channel == channel)
+            msg = await obtener_respuesta(channel, user)
             data["answers"][key] = msg.content
 
     await channel.send(f"**10.** {TANIA_QUESTIONS['reporte_materia']}")
-    msg = await bot.wait_for("message", check=lambda m: m.author == user and m.channel == channel)
+    msg = await obtener_respuesta(channel, user)
     data["answers"]["reporte_materia"] = msg.content
 
     await channel.send(f"**11.** {TANIA_QUESTIONS['protocolo_cierre']}")
-    msg = await bot.wait_for("message", check=lambda m: m.author == user and m.channel == channel)
+    msg = await obtener_respuesta(channel, user)
     data["answers"]["protocolo_cierre"] = msg.content
 
     await ask_final_questions(channel, user, data)
@@ -173,7 +200,7 @@ async def ask_ronald_questions(channel, user):
 
     for i, question in enumerate(RONALD_QUESTIONS, 1):
         await channel.send(f"**{i}.** {question}")
-        msg = await bot.wait_for("message", check=lambda m: m.author == user and m.channel == channel)
+        msg = await obtener_respuesta(channel, user)
         data["answers"][f"q{i}"] = msg.content
 
     await ask_final_questions(channel, user, data)
@@ -181,11 +208,11 @@ async def ask_ronald_questions(channel, user):
 
 async def ask_final_questions(channel, user, data):
     await channel.send("**Incidencia:** ¿Hubo alguna incidencia, problema o área de mejora hoy?")
-    msg = await bot.wait_for("message", check=lambda m: m.author == user and m.channel == channel)
+    msg = await obtener_respuesta(channel, user)
     data["answers"]["incidencia"] = msg.content
 
     await channel.send("**Notas adicionales:** ¿Comentarios finales del día?")
-    msg = await bot.wait_for("message", check=lambda m: m.author == user and m.channel == channel)
+    msg = await obtener_respuesta(channel, user)
     data["answers"]["notas"] = msg.content
 
     await save_report(channel, user, data)
@@ -215,3 +242,18 @@ async def reporte_ronald(interaction: discord.Interaction):
 
 # ==================== INICIO DEL BOT ====================
 bot.run(TOKEN)
+
+Cómo funciona la cancelación:
+• En cualquier momento mientras el bot está preguntando, el usuario puede escribir:
+  • cancelar reporte
+  • cancelar
+  • cancel
+  • detener
+  • parar
+  • abortar
+• El bot responde: “✅ Reporte cancelado.” y borra el progreso actual.
+• Queda listo para que inicies un nuevo reporte con los botones o con /reporte-tania / /reporte-ronald.
+
+Pega el código completo, sube los cambios y redeploya en Railway.
+
+¿Quieres que agregue alguna otra frase de cancelación o algún mensaje adicional? Dime y te lo actualizo listo para copiar y pegar.
