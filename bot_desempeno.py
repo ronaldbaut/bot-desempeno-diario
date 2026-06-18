@@ -3,7 +3,6 @@ from discord.ext import tasks, commands
 from discord.ui import Button, View
 from datetime import time
 from zoneinfo import ZoneInfo
-import json
 from datetime import datetime
 import os
 import traceback
@@ -27,8 +26,9 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 reports = {}
 
-# Frases para cancelar el reporte (sin importar mayúsculas/minúsculas)
+# Frases para cancelar (detección flexible)
 CANCEL_PHRASES = {"cancelar reporte", "cancelar", "cancel", "detener", "parar", "abortar", "cancelarreporte"}
+
 
 class ReporteCancelado(Exception):
     """Excepción para indicar que el usuario canceló el reporte."""
@@ -65,7 +65,8 @@ RONALD_QUESTIONS = [
     "11. ¿Cuántos clientes nuevos visitó José P. hoy?"
 ]
 
-# ==================== VISTA DE BOTONES (RECOMENDADO) ====================
+
+# ==================== VISTA DE BOTONES ====================
 class DailyReportView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -79,13 +80,14 @@ class DailyReportView(discord.ui.View):
         await start_report(interaction, "ronald")
 
 
-# ==================== HELPER PARA ESPERAR RESPUESTA CON CANCELACIÓN ====================
+# ==================== HELPER PARA ESPERAR RESPUESTA ====================
 async def obtener_respuesta(channel, user):
-    """Espera una respuesta del usuario. Si dice 'cancelar reporte' lanza ReporteCancelado."""
+    """Espera una respuesta del usuario. Si detecta cancelar, lanza excepción."""
     msg = await bot.wait_for("message", check=lambda m: m.author == user and m.channel == channel)
     contenido = msg.content.strip().lower()
 
-    if contenido in CANCEL_PHRASES:
+    # Detección flexible de cancelar
+    if any(phrase in contenido for phrase in CANCEL_PHRASES) or "cancelar" in contenido:
         await channel.send("✅ **Reporte cancelado.**\nPuedes iniciar uno nuevo cuando quieras usando los botones del mensaje diario o los comandos `/reporte-tania` y `/reporte-ronald`.")
         if user.id in reports:
             del reports[user.id]
@@ -111,11 +113,6 @@ async def daily_report():
 async def on_ready():
     print(f"✅ Bot conectado como {bot.user}")
     try:
-        # Sincroniza los slash commands
-        # NOTA: El sync global puede tardar hasta 1 hora en propagarse.
-        # Para pruebas rápidas puedes usar:
-        # guild = discord.Object(id=TU_GUILD_ID_AQUI)
-        # await bot.tree.sync(guild=guild)
         synced = await bot.tree.sync()
         print(f"✅ {len(synced)} slash commands sincronizados correctamente")
     except Exception as e:
@@ -126,7 +123,6 @@ async def on_ready():
     print("✅ Tarea diaria iniciada (20:00 America/Caracas - Venezuela)")
 
 
-# ==================== INTERACCIÓN SEGURA (por si acaso) ====================
 @bot.event
 async def on_interaction(interaction: discord.Interaction):
     if interaction.type != discord.InteractionType.component:
@@ -162,7 +158,6 @@ async def start_report(interaction, team):
         else:
             await ask_ronald_questions(channel, user)
     except ReporteCancelado:
-        # El usuario canceló → ya se le avisó y se limpió el diccionario
         return
 
 
@@ -171,10 +166,12 @@ async def ask_tania_questions(channel, user):
 
     await channel.send(f"**1.** {TANIA_QUESTIONS['alistamiento']}")
     msg = await obtener_respuesta(channel, user)
+    await channel.send("✅")
     data["answers"]["alistamiento"] = msg.content
 
     await channel.send(f"**2.** {TANIA_QUESTIONS['produccion']}")
     msg = await obtener_respuesta(channel, user)
+    await channel.send("✅")
     hubo_produccion = msg.content.lower() in ["sí", "si", "yes", "1"]
 
     if hubo_produccion:
@@ -182,14 +179,17 @@ async def ask_tania_questions(channel, user):
         for i, key in enumerate(keys, 3):
             await channel.send(f"**{i}.** {TANIA_QUESTIONS[key]}")
             msg = await obtener_respuesta(channel, user)
+            await channel.send("✅")
             data["answers"][key] = msg.content
 
     await channel.send(f"**10.** {TANIA_QUESTIONS['reporte_materia']}")
     msg = await obtener_respuesta(channel, user)
+    await channel.send("✅")
     data["answers"]["reporte_materia"] = msg.content
 
     await channel.send(f"**11.** {TANIA_QUESTIONS['protocolo_cierre']}")
     msg = await obtener_respuesta(channel, user)
+    await channel.send("✅")
     data["answers"]["protocolo_cierre"] = msg.content
 
     await ask_final_questions(channel, user, data)
@@ -201,6 +201,7 @@ async def ask_ronald_questions(channel, user):
     for i, question in enumerate(RONALD_QUESTIONS, 1):
         await channel.send(f"**{i}.** {question}")
         msg = await obtener_respuesta(channel, user)
+        await channel.send("✅")
         data["answers"][f"q{i}"] = msg.content
 
     await ask_final_questions(channel, user, data)
@@ -209,24 +210,18 @@ async def ask_ronald_questions(channel, user):
 async def ask_final_questions(channel, user, data):
     await channel.send("**Incidencia:** ¿Hubo alguna incidencia, problema o área de mejora hoy?")
     msg = await obtener_respuesta(channel, user)
+    await channel.send("✅")
     data["answers"]["incidencia"] = msg.content
 
     await channel.send("**Notas adicionales:** ¿Comentarios finales del día?")
     msg = await obtener_respuesta(channel, user)
+    await channel.send("✅")
     data["answers"]["notas"] = msg.content
 
-    await save_report(channel, user, data)
-
-
-async def save_report(channel, user, data):
-    filename = f"reporte_{data['team']}_{data['date']}.json"
-    with open(filename, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-
-    await channel.send(f"✅ **Reporte {data['team'].upper()} guardado** por {user.mention}")
-    await channel.send(f"```json\n{json.dumps(data['answers'], ensure_ascii=False, indent=2)}\n```")
-    await channel.send(f"Archivo guardado: `{filename}`")
-    print(f"✅ Reporte guardado: {filename}")
+    # === FINAL LIMPIO (sin guardar nada) ===
+    await channel.send(f"✅ **Reporte {data['team'].upper()} completado. ¡Gracias!**")
+    if user.id in reports:
+        del reports[user.id]
 
 
 # ==================== COMANDOS SLASH ====================
