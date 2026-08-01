@@ -6,6 +6,8 @@ from zoneinfo import ZoneInfo
 from datetime import datetime
 import os
 import traceback
+from openai import OpenAI
+import json
 
 print(">>> Iniciando bot de desempeño diario...")
 
@@ -22,18 +24,23 @@ CHANNEL_ID = int(CHANNEL_ID_STR)
 
 intents = discord.Intents.default()
 intents.message_content = True
+
 bot = commands.Bot(command_prefix="!", intents=intents)
+
+# Cliente de xAI (Grok)
+client = OpenAI(
+    api_key=os.getenv("XAI_API_KEY"),
+    base_url="https://api.x.ai/v1"
+)
 
 reports = {}
 
 # Frases para cancelar (detección flexible)
-CANCEL_PHRASES = {"cancelar reporte", "cancelar", "cancel", "detener", "parar", "abortar", "cancelarreporte"}
-
+CANCEL_PHRASES = {"cancelar reporte", "cancelar", "cancel", "detener", "parar", "abortar", "cancelarreporte", "canelar"}
 
 class ReporteCancelado(Exception):
     """Excepción para indicar que el usuario canceló el reporte."""
     pass
-
 
 # ==================== PREGUNTAS TANIA ====================
 TANIA_QUESTIONS = {
@@ -65,7 +72,6 @@ RONALD_QUESTIONS = [
     "11. ¿Cuántos clientes nuevos visitó José P. hoy?"
 ]
 
-
 # ==================== VISTA DE BOTONES ====================
 class DailyReportView(discord.ui.View):
     def __init__(self):
@@ -78,7 +84,6 @@ class DailyReportView(discord.ui.View):
     @discord.ui.button(label="Iniciar Reporte Ronald", style=discord.ButtonStyle.primary, custom_id="daily_ronald_v1")
     async def ronald_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await start_report(interaction, "ronald")
-
 
 # ==================== HELPER PARA ESPERAR RESPUESTA ====================
 async def obtener_respuesta(channel, user):
@@ -95,7 +100,6 @@ async def obtener_respuesta(channel, user):
 
     return msg
 
-
 # ==================== TAREA DIARIA ====================
 @tasks.loop(time=time(hour=20, minute=0, tzinfo=ZoneInfo("America/Caracas")))
 async def daily_report():
@@ -103,11 +107,9 @@ async def daily_report():
     if not channel:
         print("⚠️ Canal no encontrado en daily_report")
         return
-
     view = DailyReportView()
     await channel.send("🕒 **Hora del Reporte Diario (20:00)**\n¿Comenzamos?", view=view)
     print("✅ Mensaje de reporte diario enviado con botones")
-
 
 @bot.event
 async def on_ready():
@@ -118,10 +120,8 @@ async def on_ready():
     except Exception as e:
         print(f"❌ Error al sincronizar comandos: {e}")
         traceback.print_exc()
-
     daily_report.start()
     print("✅ Tarea diaria iniciada (20:00 America/Caracas - Venezuela)")
-
 
 @bot.event
 async def on_interaction(interaction: discord.Interaction):
@@ -137,10 +137,8 @@ async def on_interaction(interaction: discord.Interaction):
         print(f"❌ Error en on_interaction: {e}")
         traceback.print_exc()
 
-
 async def start_report(interaction, team):
     await interaction.response.defer()
-
     user = interaction.user
     report_data = {"team": team, "date": datetime.now().strftime("%Y-%m-%d"), "answers": {}}
     reports[user.id] = report_data
@@ -159,7 +157,6 @@ async def start_report(interaction, team):
             await ask_ronald_questions(channel, user)
     except ReporteCancelado:
         return
-
 
 async def ask_tania_questions(channel, user):
     data = reports[user.id]
@@ -194,7 +191,6 @@ async def ask_tania_questions(channel, user):
 
     await ask_final_questions(channel, user, data)
 
-
 async def ask_ronald_questions(channel, user):
     data = reports[user.id]
 
@@ -205,7 +201,6 @@ async def ask_ronald_questions(channel, user):
         data["answers"][f"q{i}"] = msg.content
 
     await ask_final_questions(channel, user, data)
-
 
 async def ask_final_questions(channel, user, data):
     await channel.send("**Incidencia:** ¿Hubo alguna incidencia, problema o área de mejora hoy?")
@@ -223,17 +218,14 @@ async def ask_final_questions(channel, user, data):
     if user.id in reports:
         del reports[user.id]
 
-
 # ==================== COMANDOS SLASH ====================
 @bot.tree.command(name="reporte-tania", description="Inicia reporte manual Tania")
 async def reporte_tania(interaction: discord.Interaction):
     await start_report(interaction, "tania")
 
-
 @bot.tree.command(name="reporte-ronald", description="Inicia reporte manual Ronald")
 async def reporte_ronald(interaction: discord.Interaction):
     await start_report(interaction, "ronald")
-
 
 # ==================== INICIO DEL BOT ====================
 bot.run(TOKEN)
