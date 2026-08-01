@@ -35,11 +35,10 @@ client = OpenAI(
 
 reports = {}
 
-# Frases para cancelar (detección flexible)
+# Frases para cancelar
 CANCEL_PHRASES = {"cancelar reporte", "cancelar", "cancel", "detener", "parar", "abortar", "cancelarreporte", "canelar"}
 
 class ReporteCancelado(Exception):
-    """Excepción para indicar que el usuario canceló el reporte."""
     pass
 
 # ==================== PREGUNTAS TANIA ====================
@@ -85,20 +84,84 @@ class DailyReportView(discord.ui.View):
     async def ronald_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await start_report(interaction, "ronald")
 
-# ==================== HELPER PARA ESPERAR RESPUESTA ====================
-async def obtener_respuesta(channel, user):
-    """Espera una respuesta del usuario. Si detecta cancelar, lanza excepción."""
-    msg = await bot.wait_for("message", check=lambda m: m.author == user and m.channel == channel)
-    contenido = msg.content.strip().lower()
+# ==================== FUNCIÓN QUE CONSULTA A GROK ====================
+async def consultar_grok(pregunta: str, respuesta_usuario: str) -> dict:
+    system_prompt = """
+Eres un supervisor estricto de reportes diarios de desempeño en una fábrica de helados.
 
-    # Detección flexible de cancelar
-    if any(phrase in contenido for phrase in CANCEL_PHRASES) or "cancelar" in contenido:
-        await channel.send("✅ **Reporte cancelado.**\nPuedes iniciar uno nuevo cuando quieras usando los botones del mensaje diario o los comandos `/reporte-tania` y `/reporte-ronald`.")
-        if user.id in reports:
-            del reports[user.id]
-        raise ReporteCancelado()
+Responde ÚNICAMENTE con un JSON válido:
 
-    return msg
+{
+  "respuesta_valida": true o false,
+  "mensaje": null o "texto"
+}
+
+Reglas:
+- Si la respuesta es muy corta, vacía, irrelevante o no responde claramente la pregunta → respuesta_valida = false
+- Cuando sea inválida, el campo "mensaje" debe decir de forma clara, simple y contundente qué falta.
+  Ejemplos:
+  - "Te falta decirme si lo hicieron correctamente o no."
+  - "Responde sí o no de forma clara."
+  - "No me dijiste la cantidad."
+- Sé directo y corto.
+- Si la respuesta es válida, pon "mensaje": null
+"""
+
+    user_content = f"""
+Pregunta actual:
+{pregunta}
+
+Respuesta del trabajador:
+"{respuesta_usuario}"
+"""
+
+    try:
+        response = client.chat.completions.create(
+            model="grok-4-1-fast",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content}
+            ],
+            temperature=0.2,
+            response_format={"type": "json_object"}
+        )
+        return json.loads(response.choices[0].message.content)
+    except Exception as e:
+        print(f"Error al consultar Grok: {e}")
+        return {
+            "respuesta_valida": True,
+            "mensaje": None
+        }
+
+# ==================== HELPER PARA ESPERAR RESPUESTA (CON VALIDACIÓN) ====================
+async def obtener_respuesta(channel, user, pregunta: str):
+    """Espera una respuesta válida del usuario. Si es inválida, regaña y vuelve a preguntar."""
+    while True:
+        msg = await bot.wait_for("message", check=lambda m: m.author == user and m.channel == channel)
+        contenido = msg.content.strip().lower()
+
+        # Detección de cancelar
+        if any(phrase in contenido for phrase in CANCEL_PHRASES) or "cancelar" in contenido:
+            await channel.send("✅ **Reporte cancelado.**\nPuedes iniciar uno nuevo cuando quieras usando los botones o los comandos `/reporte-tania` y `/reporte-ronald`.")
+            if user.id in reports:
+                del reports[user.id]
+            raise ReporteCancelado()
+
+        # Reacción
+        try:
+            await msg.add_reaction("✅")
+        except:
+            pass
+
+        # Validar con Grok
+        decision = await consultar_grok(pregunta, msg.content)
+
+        if decision.get("respuesta_valida", True):
+            return msg
+        else:
+            mensaje = decision.get("mensaje") or "Tu respuesta está incompleta. Responde correctamente."
+            await channel.send(mensaje)
+            # Vuelve a esperar otra respuesta (no avanza)
 
 # ==================== TAREA DIARIA ====================
 @tasks.loop(time=time(hour=20, minute=0, tzinfo=ZoneInfo("America/Caracas")))
@@ -114,118 +177,3 @@ async def daily_report():
 @bot.event
 async def on_ready():
     print(f"✅ Bot conectado como {bot.user}")
-    try:
-        synced = await bot.tree.sync()
-        print(f"✅ {len(synced)} slash commands sincronizados correctamente")
-    except Exception as e:
-        print(f"❌ Error al sincronizar comandos: {e}")
-        traceback.print_exc()
-    daily_report.start()
-    print("✅ Tarea diaria iniciada (20:00 America/Caracas - Venezuela)")
-
-@bot.event
-async def on_interaction(interaction: discord.Interaction):
-    if interaction.type != discord.InteractionType.component:
-        return
-    try:
-        custom_id = interaction.data.get("custom_id")
-        if custom_id in ("daily_tania_v1", "tania"):
-            await start_report(interaction, "tania")
-        elif custom_id in ("daily_ronald_v1", "ronald"):
-            await start_report(interaction, "ronald")
-    except Exception as e:
-        print(f"❌ Error en on_interaction: {e}")
-        traceback.print_exc()
-
-async def start_report(interaction, team):
-    await interaction.response.defer()
-    user = interaction.user
-    report_data = {"team": team, "date": datetime.now().strftime("%Y-%m-%d"), "answers": {}}
-    reports[user.id] = report_data
-
-    try:
-        await interaction.followup.send(f"📋 **Reporte {team.upper()} iniciado** por {user.mention}\n\n_Escribe **cancelar reporte** en cualquier momento para detenerlo._")
-    except:
-        pass
-
-    channel = interaction.channel
-
-    try:
-        if team == "tania":
-            await ask_tania_questions(channel, user)
-        else:
-            await ask_ronald_questions(channel, user)
-    except ReporteCancelado:
-        return
-
-async def ask_tania_questions(channel, user):
-    data = reports[user.id]
-
-    await channel.send(f"**1.** {TANIA_QUESTIONS['alistamiento']}")
-    msg = await obtener_respuesta(channel, user)
-    await channel.send("✅")
-    data["answers"]["alistamiento"] = msg.content
-
-    await channel.send(f"**2.** {TANIA_QUESTIONS['produccion']}")
-    msg = await obtener_respuesta(channel, user)
-    await channel.send("✅")
-    hubo_produccion = msg.content.lower() in ["sí", "si", "yes", "1"]
-
-    if hubo_produccion:
-        keys = ["licuadas", "protocolo_batidoras", "cambios_agua", "tiempo_produccion", "implementos", "envasado", "asistencia"]
-        for i, key in enumerate(keys, 3):
-            await channel.send(f"**{i}.** {TANIA_QUESTIONS[key]}")
-            msg = await obtener_respuesta(channel, user)
-            await channel.send("✅")
-            data["answers"][key] = msg.content
-
-    await channel.send(f"**10.** {TANIA_QUESTIONS['reporte_materia']}")
-    msg = await obtener_respuesta(channel, user)
-    await channel.send("✅")
-    data["answers"]["reporte_materia"] = msg.content
-
-    await channel.send(f"**11.** {TANIA_QUESTIONS['protocolo_cierre']}")
-    msg = await obtener_respuesta(channel, user)
-    await channel.send("✅")
-    data["answers"]["protocolo_cierre"] = msg.content
-
-    await ask_final_questions(channel, user, data)
-
-async def ask_ronald_questions(channel, user):
-    data = reports[user.id]
-
-    for i, question in enumerate(RONALD_QUESTIONS, 1):
-        await channel.send(f"**{i}.** {question}")
-        msg = await obtener_respuesta(channel, user)
-        await channel.send("✅")
-        data["answers"][f"q{i}"] = msg.content
-
-    await ask_final_questions(channel, user, data)
-
-async def ask_final_questions(channel, user, data):
-    await channel.send("**Incidencia:** ¿Hubo alguna incidencia, problema o área de mejora hoy?")
-    msg = await obtener_respuesta(channel, user)
-    await channel.send("✅")
-    data["answers"]["incidencia"] = msg.content
-
-    await channel.send("**Notas adicionales:** ¿Comentarios finales del día?")
-    msg = await obtener_respuesta(channel, user)
-    await channel.send("✅")
-    data["answers"]["notas"] = msg.content
-
-    # === FINAL LIMPIO (sin guardar nada) ===
-    await channel.send(f"✅ **Reporte {data['team'].upper()} completado. ¡Gracias!**")
-    if user.id in reports:
-        del reports[user.id]
-
-# ==================== COMANDOS SLASH ====================
-@bot.tree.command(name="reporte-tania", description="Inicia reporte manual Tania")
-async def reporte_tania(interaction: discord.Interaction):
-    await start_report(interaction, "tania")
-
-@bot.tree.command(name="reporte-ronald", description="Inicia reporte manual Ronald")
-async def reporte_ronald(interaction: discord.Interaction):
-    await start_report(interaction, "ronald")
-
-# ==================== INICIO DEL BOT ====================
-bot.run(TOKEN)
