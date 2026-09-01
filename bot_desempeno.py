@@ -7,39 +7,183 @@ import traceback
 from openai import OpenAI
 import json
 import re
- 
+
 print(">>> Iniciando bot de desempeño diario...")
- 
+
 # ==================== CONFIGURACIÓN ====================
 TOKEN = os.getenv("TOKEN")
 CHANNEL_ID_STR = os.getenv("CHANNEL_ID")
- 
+
 if not TOKEN:
     raise RuntimeError("❌ ERROR: Falta la variable de entorno TOKEN en Railway")
 if not CHANNEL_ID_STR:
     raise RuntimeError("❌ ERROR: Falta la variable de entorno CHANNEL_ID en Railway")
- 
+
 CHANNEL_ID = int(CHANNEL_ID_STR)
 TZ = ZoneInfo("America/Caracas")
- 
+
 intents = discord.Intents.default()
 intents.message_content = True
- 
+
 bot = commands.Bot(command_prefix="!", intents=intents)
- 
+
 client = OpenAI(
     api_key=os.getenv("XAI_API_KEY"),
     base_url="https://api.x.ai/v1",
 )
- 
+
 # reports[user_id] = { team, date, answers, buffer, active }
 reports = {}
- 
- 
+
+
 class ReporteCancelado(Exception):
     pass
- 
- 
+
+
+# ==================== TRABAJADORES DE PRODUCCIÓN ====================
+# Metas diarias tomadas del Cuadro de Mando Integral (KPIs).
+# El bot las recuerda y Tania responde si esa persona las cumplió todas.
+
+META_ASISTENCIA = (
+    "Asistencia y puntualidad: llegó a la hora acordada y registró huella "
+    "al entrar y al salir."
+)
+META_ASISTENCIA_ENVASADO = (
+    META_ASISTENCIA + " En turno de envasado el día solo cuenta si también "
+    "se cumplió el tiempo de envasado."
+)
+META_ENVASADO = (
+    "Tiempo de envasado (turno tarde): 14 segundos por vasito con 4 trabajadores, "
+    "18 s con 3, o 26 s con 2."
+)
+META_CIERRE = (
+    "Protocolo diario de cierre (turno tarde): se cumplió el 100% y se envió "
+    "toda la información solicitada."
+)
+META_ALISTAMIENTO_TARDE = (
+    "Alistamiento de pedidos (turno tarde): pedidos del día siguiente completos "
+    "y sin errores (no cuenta si se alistaron el mismo día o a medias)."
+)
+META_TIEMPO_BATIDA = (
+    "Tiempo de producción por batida (turno mañana): promedio de 30 minutos o menos."
+)
+META_PROTOCOLO_BATIDORAS = (
+    "Protocolo de encendido y apagado de las batidoras (turno mañana), "
+    "reportando todo lo solicitado."
+)
+META_AGUA_SAL = (
+    "Agua sal de las batidoras (turno mañana): máximo 1 cambio por batidora "
+    "cada dos meses. Si hoy hubo cambio, debe reportarse."
+)
+
+REGLAS_CUMPLIMIENTO_TRABAJADOR = (
+    "Sí/No válido. 'Sí' = cumplió todas las metas que aplicaron hoy. "
+    "'No' ES válido y puede indicar cuáles no cumplió "
+    "(ej. 'No, llegó tarde' / 'No, se pasaron en envasado'). "
+    "'No vino' / 'No trabajó' / 'N/A' / 'No aplica' ES válido si no correspondía el día "
+    "o no hubo producción en su turno. "
+    "Detalle es bienvenido pero no obligatorio si dice sí o no con claridad."
+)
+
+
+def _pregunta_cumplimiento(nombre: str, metas: list[str]) -> str:
+    bullets = "\n".join(f"• {m}" for m in metas)
+    return (
+        f"**Metas de {nombre} hoy:**\n"
+        f"{bullets}\n\n"
+        f"¿{nombre} cumplió **todas** estas metas hoy?"
+    )
+
+
+TRABAJADORES_PRODUCCION = [
+    {
+        "key": "adrian_l",
+        "nombre": "Adrián L.",
+        "metas": [
+            META_ASISTENCIA_ENVASADO,
+            META_TIEMPO_BATIDA,
+            META_PROTOCOLO_BATIDORAS,
+            META_AGUA_SAL,
+            META_ENVASADO,
+            META_ALISTAMIENTO_TARDE,
+            META_CIERRE,
+        ],
+    },
+    {
+        "key": "angel_l",
+        "nombre": "Ángel L.",
+        "metas": [
+            META_ASISTENCIA_ENVASADO,
+            META_ENVASADO,
+            META_ALISTAMIENTO_TARDE,
+            META_CIERRE,
+        ],
+    },
+    {
+        "key": "jose_m_p",
+        "nombre": "José M. P.",
+        "metas": [
+            META_ASISTENCIA_ENVASADO,
+            META_ENVASADO,
+            META_ALISTAMIENTO_TARDE,
+            META_CIERRE,
+        ],
+    },
+    {
+        "key": "luis_p",
+        "nombre": "Luis P.",
+        "metas": [
+            META_ASISTENCIA_ENVASADO,
+            META_TIEMPO_BATIDA,
+            META_ENVASADO,
+            META_ALISTAMIENTO_TARDE,
+            META_CIERRE,
+        ],
+    },
+    {
+        "key": "maria_r",
+        "nombre": "María R.",
+        "metas": [
+            META_ASISTENCIA,
+            (
+                "Licuadas y alistamiento de materiales (turno mañana): las batidas "
+                "del día sin errores de fórmula, tanto en la preparación de las "
+                "licuadas como en el alistamiento de los materiales."
+            ),
+        ],
+    },
+    {
+        "key": "margaret_m",
+        "nombre": "Margaret M.",
+        "metas": [
+            META_ASISTENCIA,
+            (
+                "Implementos listos para la siguiente jornada: vasitos, tapitas y "
+                "complementos separados, contados y ubicados en su lugar antes de "
+                "terminar, para que la producción no se detenga al día siguiente."
+            ),
+            (
+                "Reporte diario de materia prima: inventario inicial y final en bultos, "
+                "consumo de adicionales e insumos próximos a agotarse, enviado "
+                "completo el mismo día (no al día siguiente)."
+            ),
+        ],
+    },
+    {
+        "key": "yuselis_m",
+        "nombre": "Yuselis M.",
+        "metas": [
+            META_ASISTENCIA_ENVASADO,
+            META_PROTOCOLO_BATIDORAS,
+            META_AGUA_SAL,
+            META_ENVASADO,
+            META_ALISTAMIENTO_TARDE,
+            META_CIERRE,
+        ],
+    },
+]
+
+
 # ==================== PREGUNTAS TANIA ====================
 # Cada item: key, texto, reglas para Grok, tipo
 TANIA_FLOW = [
@@ -58,89 +202,16 @@ TANIA_FLOW = [
         "tipo": "si_no",
         "reglas": "Sí/No / 'hubo' / 'no hubo' son válidos. Es la pregunta de bifurcación.",
     },
-    # --- Solo si hubo producción ---
-    {
-        "key": "licuadas",
-        "texto": (
-            "¿María R. logró las batidas de hoy sin errores en la fórmula "
-            "ni en el alistamiento de materiales?"
-        ),
-        "tipo": "si_no_detalle",
-        "solo_si_produccion": True,
-        "reglas": "Sí/No válido. Si hubo errores, detalle es bienvenido pero no obligatorio si dice no.",
-    },
-    {
-        "key": "protocolo_batidoras",
-        "texto": "¿Se cumplió correctamente el protocolo de encendido y apagado de las batidoras hoy?",
-        "tipo": "si_no_detalle",
-        "solo_si_produccion": True,
-        "reglas": "Sí/No válido. Puede matizar (ej. 'casi, faltó video de la 3').",
-    },
-    {
-        "key": "cambios_agua",
-        "texto": "¿Fue necesario un cambio de agua sal hoy?",
-        "tipo": "si_no_detalle",
-        "solo_si_produccion": True,
-        "reglas": "Sí/No válido.",
-    },
-    {
-        "key": "tiempo_produccion",
-        "texto": "¿Se mantuvo el promedio de tiempo por batida en 30 minutos o menos hoy?",
-        "tipo": "si_no_detalle",
-        "solo_si_produccion": True,
-        "reglas": "Sí/No válido. Puede dar tiempos reales si quiere.",
-    },
-    {
-        "key": "implementos",
-        "texto": (
-            "¿Margaret M. dejó separados, contados y organizados todos los implementos "
-            "para la jornada de hoy?"
-        ),
-        "tipo": "si_no_detalle",
-        "solo_si_produccion": True,
-        "reglas": "Sí/No válido.",
-    },
-    {
-        "key": "envasado",
-        "texto": "¿Se cumplieron las metas de tiempo de envasado por vasito hoy?",
-        "tipo": "si_no_detalle",
-        "solo_si_produccion": True,
-        "reglas": "Sí/No válido. 'No, se demoraron en trisabor' ES válido.",
-    },
-    {
-        "key": "asistencia",
-        "texto": "¿Todo el personal llegó a tiempo, registró correctamente su huella y no faltó nadie hoy?",
-        "tipo": "si_no_detalle",
-        "solo_si_produccion": True,
-        "reglas": (
-            "Sí es válido. Si alguien llegó tarde o falló huella, la respuesta con nombres ES válida "
-            "(no exijas 'sí' puro). 'Yuselis llegó tarde, Luis marcó huella y no salió' ES válido."
-        ),
-    },
-    # --- Siempre ---
-    {
-        "key": "reporte_materia",
-        "texto": (
-            "¿Margaret M. envió correctamente el reporte diario con inventario inicial/final, "
-            "consumo de adicionales y lista de insumos próximos a agotarse hoy?"
-        ),
-        "tipo": "si_no_detalle",
-        "reglas": (
-            "Sí/No válido. Si no envió o envió a medias, la explicación ES válida "
-            "(ej. 'No, mandó foto de adicionales pero no el reporte porque no había luz')."
-        ),
-    },
-    {
-        "key": "protocolo_cierre",
-        "texto": (
-            "¿Se cumplió el 100% del protocolo diario de cierre y se envió "
-            "toda la información solicitada hoy?"
-        ),
-        "tipo": "si_no_detalle",
-        "reglas": (
-            "Sí/No válido. Matiz tipo 'sí pero se equivocaron con gasolina planta roja' ES válido."
-        ),
-    },
+    *[
+        {
+            "key": t["key"],
+            "texto": _pregunta_cumplimiento(t["nombre"], t["metas"]),
+            "tipo": "si_no_detalle",
+            "reglas": REGLAS_CUMPLIMIENTO_TRABAJADOR,
+            "trabajador": t["nombre"],
+        }
+        for t in TRABAJADORES_PRODUCCION
+    ],
     {
         "key": "incidencia",
         "texto": "¿Hubo alguna incidencia, problema o área de mejora hoy?",
@@ -157,7 +228,7 @@ TANIA_FLOW = [
         "reglas": "'No' / 'Ninguno' / 'Nada' ES válido. Comentario libre también.",
     },
 ]
- 
+
 # ==================== PREGUNTAS RONALD ====================
 RONALD_FLOW = [
     {
@@ -275,16 +346,16 @@ RONALD_FLOW = [
         "reglas": "'No' / 'Ninguno' ES válido.",
     },
 ]
- 
- 
+
+
 # ==================== HELPERS ====================
 def _vacio_o_basura(texto: str) -> bool:
     t = (texto or "").strip()
     if not t:
         return True
     return t.lower() in {".", "..", "...", "ok", "vale", "listo", "k", "ya", "-", "—"}
- 
- 
+
+
 def _parece_cancelar(content_lower: str) -> bool:
     patrones = [
         r"^cancelar(\s+reporte)?$",
@@ -297,8 +368,36 @@ def _parece_cancelar(content_lower: str) -> bool:
         r"^reporte\s+cancelado$",
     ]
     return any(re.match(p, content_lower) for p in patrones)
- 
- 
+
+
+def _es_na(texto: str) -> bool:
+    t = re.sub(r"[¡!?.]", "", (texto or "").strip().lower())
+    if not t:
+        return False
+    if t in {
+        "n/a",
+        "na",
+        "n.a",
+        "n.a.",
+        "no aplica",
+        "no aplico",
+        "no vino",
+        "no trabajó",
+        "no trabajo",
+        "no le tocó",
+        "no le toco",
+        "no correspondió",
+        "no correspondio",
+    }:
+        return True
+    return bool(
+        re.match(
+            r"^(n/?a|no aplica|no vino|no trabaj[oó])\b",
+            t,
+        )
+    )
+
+
 def _es_respuesta_si(texto: str) -> bool | None:
     """True=sí, False=no, None=no claro."""
     t = (texto or "").strip().lower()
@@ -324,8 +423,8 @@ def _es_respuesta_si(texto: str) -> bool | None:
     if re.search(r"\bhubo\s+producci|\bs[ií]\s+hubo\b", t):
         return True
     return None
- 
- 
+
+
 def _es_finde_o_festivo(d: date | None = None) -> bool:
     """Fin de semana. (Festivos locales: ampliar lista si quieres.)"""
     d = d or datetime.now(TZ).date()
@@ -345,13 +444,13 @@ def _es_finde_o_festivo(d: date | None = None) -> bool:
         (12, 31),
     }
     return (d.month, d.day) in festivos_fijos
- 
- 
+
+
 # ==================== VISTA DE BOTONES ====================
 class DailyReportView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
- 
+
     @discord.ui.button(
         label="Iniciar Reporte Tania",
         style=discord.ButtonStyle.primary,
@@ -359,7 +458,7 @@ class DailyReportView(discord.ui.View):
     )
     async def tania_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await start_report(interaction, "tania")
- 
+
     @discord.ui.button(
         label="Iniciar Reporte Ronald",
         style=discord.ButtonStyle.primary,
@@ -367,8 +466,8 @@ class DailyReportView(discord.ui.View):
     )
     async def ronald_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await start_report(interaction, "ronald")
- 
- 
+
+
 # ==================== GROK ====================
 async def consultar_grok(
     pregunta_item: dict,
@@ -383,7 +482,7 @@ Responde ÚNICAMENTE JSON:
   "mensaje": null o "texto corto pidiendo SOLO lo que falta",
   "interpretacion_si_no": "si" | "no" | "na" | null
 }
- 
+
 Principios:
 1. Sé RAZONABLE. Muchas preguntas son de sí/no: "Si", "No", "Sí", "si" SON válidas.
 2. "No" / "Ninguna" / "Nada" en incidencias o comentarios finales ES válido.
@@ -394,28 +493,30 @@ Principios:
 7. Nunca uses solo "Responde completo lo que se te preguntó" sin decir qué falta.
 8. Punto "." o vacío → inválido.
 9. interpretacion_si_no: rellena "si"/"no" cuando la pregunta es de ese tipo y se entiende; "na" si no aplica; null si no es sí/no.
- 
+10. En metas por trabajador: "Sí", "No", "N/A", "No aplica", "No vino", "No trabajó" SON válidos.
+    Si dice no, NO exijas listar cada meta incumplida.
+
 Errores a evitar:
 - Rechazar un "Si" o "No" claro en preguntas de cumplimiento.
 - Rechazar "No" en comentarios finales.
 - Pedir detalles obligatorios cuando la persona ya contestó no/sí con claridad.
 """
- 
+
     user_content = f"""
 Pregunta:
 {pregunta_item["texto"]}
- 
+
 Tipo: {pregunta_item.get("tipo")}
 Reglas de esta pregunta:
 {pregunta_item.get("reglas", "")}
- 
+
 BUFFER (intentos previos misma pregunta):
 \"\"\"{buffer or "(vacío)"}\"\"\"
- 
+
 Respuesta NUEVA:
 \"\"\"{respuesta_nueva}\"\"\"
 """
- 
+
     try:
         response = client.chat.completions.create(
             model="grok-4-1-fast",
@@ -448,8 +549,8 @@ Respuesta NUEVA:
             "mensaje": None,
             "interpretacion_si_no": "si" if sn is True else ("no" if sn is False else None),
         }
- 
- 
+
+
 # ==================== OBTENER RESPUESTA ====================
 async def obtener_respuesta(channel, user, pregunta_item: dict) -> tuple[str, dict]:
     """
@@ -458,7 +559,7 @@ async def obtener_respuesta(channel, user, pregunta_item: dict) -> tuple[str, di
     """
     buffer = ""
     pregunta_txt = pregunta_item["texto"]
- 
+
     while True:
         msg = await bot.wait_for(
             "message",
@@ -466,7 +567,7 @@ async def obtener_respuesta(channel, user, pregunta_item: dict) -> tuple[str, di
         )
         contenido = (msg.content or "").strip()
         contenido_lower = contenido.lower()
- 
+
         if _parece_cancelar(contenido_lower):
             await channel.send(
                 "✅ **Reporte cancelado.**\n"
@@ -475,16 +576,28 @@ async def obtener_respuesta(channel, user, pregunta_item: dict) -> tuple[str, di
             if user.id in reports:
                 del reports[user.id]
             raise ReporteCancelado()
- 
+
         if _vacio_o_basura(contenido) and not msg.attachments:
             await channel.send(
                 "Escribe la respuesta con datos (no uses solo un punto). "
                 "En preguntas de sí/no basta con **Sí** o **No**."
             )
             continue
- 
+
         # Atajo local para sí/no claros (ahorra tokens y evita rechazos absurdos)
         tipo = pregunta_item.get("tipo")
+        if tipo in {"si_no", "si_no_detalle"} and _es_na(contenido) and len(contenido) <= 80:
+            try:
+                await msg.add_reaction("✅")
+            except Exception:
+                pass
+            final = (buffer + "\n" + contenido).strip() if buffer else contenido
+            return final, {
+                "respuesta_valida": True,
+                "mensaje": None,
+                "interpretacion_si_no": "na",
+            }
+
         sn_local = _es_respuesta_si(contenido)
         if tipo in {"si_no", "si_no_detalle"} and sn_local is not None and len(contenido) <= 80:
             # Si es matiz largo con "si pero..." de más de 80 chars, deja que Grok mire
@@ -499,7 +612,7 @@ async def obtener_respuesta(channel, user, pregunta_item: dict) -> tuple[str, di
             }
             final = (buffer + "\n" + contenido).strip() if buffer else contenido
             return final, decision
- 
+
         if tipo == "abierta" and sn_local is False:
             # "No" / "Ninguna" en incidencia o notas
             try:
@@ -511,9 +624,9 @@ async def obtener_respuesta(channel, user, pregunta_item: dict) -> tuple[str, di
                 "mensaje": None,
                 "interpretacion_si_no": "no",
             }
- 
+
         decision = await consultar_grok(pregunta_item, contenido, buffer)
- 
+
         if not decision.get("respuesta_valida", False):
             buffer = (buffer + "\n" + contenido).strip() if buffer else contenido
             mensaje = decision.get("mensaje") or "Falta un dato. Completa solo lo que falta."
@@ -525,30 +638,30 @@ async def obtener_respuesta(channel, user, pregunta_item: dict) -> tuple[str, di
                 mensaje = "Me falta un dato concreto de la pregunta. Complétalo en un mensaje más."
             await channel.send(mensaje)
             continue
- 
+
         try:
             await msg.add_reaction("✅")
         except Exception:
             pass
- 
+
         final = (buffer + "\n" + contenido).strip() if buffer else contenido
         return final, decision
- 
- 
+
+
 # ==================== FLUJOS ====================
 async def ask_flow(channel, user, flow: list, hubo_produccion: bool | None = None):
     data = reports[user.id]
     num = 0
- 
+
     for item in flow:
         if item.get("solo_si_produccion") and not hubo_produccion:
             data["answers"][item["key"]] = "N/A — no hubo producción"
             continue
- 
+
         if item.get("solo_finde_o_festivo") and not _es_finde_o_festivo():
             data["answers"][item["key"]] = "N/A — no es fin de semana ni festivo"
             continue
- 
+
         num += 1
         etiqueta = item["key"]
         if etiqueta == "incidencia":
@@ -557,10 +670,10 @@ async def ask_flow(channel, user, flow: list, hubo_produccion: bool | None = Non
             await channel.send(f"**Notas adicionales:** {item['texto']}")
         else:
             await channel.send(f"**{num}.** {item['texto']}")
- 
+
         texto, decision = await obtener_respuesta(channel, user, item)
         data["answers"][item["key"]] = texto
- 
+
         # Bifurcación producción (pregunta 2 de Tania)
         if item["key"] == "produccion":
             interp = decision.get("interpretacion_si_no")
@@ -575,10 +688,11 @@ async def ask_flow(channel, user, flow: list, hubo_produccion: bool | None = Non
             data["hubo_produccion"] = hubo_produccion
             if not hubo_produccion:
                 await channel.send(
-                    "_No hubo producción: salto las preguntas de batidas, batidoras, "
-                    "envasado e implementos de producción._"
+                    "_No hubo producción: igual pregunto por cada persona. "
+                    "Responde **N/A** o **no trabajó** si no aplicaron sus metas de planta. "
+                    "Asistencia, reporte de materia prima, alistamiento o cierre sí pueden aplicar._"
                 )
- 
+
     await channel.send(f"✅ **Reporte {data['team'].upper()} completado. ¡Gracias!**")
     print(
         f"[DESEMPEÑO OK] team={data['team']} user={user.id} "
@@ -586,16 +700,16 @@ async def ask_flow(channel, user, flow: list, hubo_produccion: bool | None = Non
     )
     if user.id in reports:
         del reports[user.id]
- 
- 
+
+
 async def ask_tania_questions(channel, user):
     await ask_flow(channel, user, TANIA_FLOW, hubo_produccion=None)
- 
- 
+
+
 async def ask_ronald_questions(channel, user):
     await ask_flow(channel, user, RONALD_FLOW, hubo_produccion=None)
- 
- 
+
+
 # ==================== TAREA DIARIA ====================
 @tasks.loop(time=time(hour=20, minute=0, tzinfo=TZ))
 async def daily_report():
@@ -609,8 +723,8 @@ async def daily_report():
         view=view,
     )
     print("✅ Mensaje de reporte diario enviado con botones")
- 
- 
+
+
 @bot.event
 async def on_ready():
     print(f"✅ Bot conectado como {bot.user}")
@@ -622,15 +736,15 @@ async def on_ready():
     except Exception as e:
         print(f"❌ Error al sincronizar comandos: {e}")
         traceback.print_exc()
- 
+
     if not daily_report.is_running():
         daily_report.start()
     print("✅ Tarea diaria iniciada (20:00 America/Caracas)")
- 
- 
+
+
 async def start_report(interaction: discord.Interaction, team: str):
     user = interaction.user
- 
+
     if user.id in reports:
         try:
             await interaction.response.send_message(
@@ -644,19 +758,19 @@ async def start_report(interaction: discord.Interaction, team: str):
                 ephemeral=True,
             )
         return
- 
+
     try:
         await interaction.response.defer(ephemeral=True)
     except discord.InteractionResponded:
         pass
- 
+
     reports[user.id] = {
         "team": team,
         "date": datetime.now(TZ).strftime("%Y-%m-%d"),
         "answers": {},
         "active": True,
     }
- 
+
     try:
         await interaction.followup.send(
             f"📋 **Reporte {team.upper()} iniciado** por {user.mention}\n\n"
@@ -669,7 +783,7 @@ async def start_report(interaction: discord.Interaction, team: str):
             f"📋 **Reporte {team.upper()} iniciado** por {user.mention}\n\n"
             f"_Escribe **cancelar reporte** para detenerlo._"
         )
- 
+
     channel = interaction.channel
     try:
         if team == "tania":
@@ -690,18 +804,18 @@ async def start_report(interaction: discord.Interaction, team: str):
             )
         except Exception:
             pass
- 
- 
+
+
 # ==================== SLASH ====================
 @bot.tree.command(name="reporte-tania", description="Inicia reporte manual Tania")
 async def reporte_tania(interaction: discord.Interaction):
     await start_report(interaction, "tania")
- 
- 
+
+
 @bot.tree.command(name="reporte-ronald", description="Inicia reporte manual Ronald")
 async def reporte_ronald(interaction: discord.Interaction):
     await start_report(interaction, "ronald")
- 
- 
+
+
 # ==================== INICIO ====================
 bot.run(TOKEN)
