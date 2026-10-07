@@ -257,19 +257,6 @@ RONALD_FLOW = [
         "reglas": "Sí/No válido.",
     },
     {
-        "key": "q4",
-        "texto": (
-            "¿Se envió el reporte semanal con la cartelera fiscal, la situación de los contratos "
-            "pendientes (no emitidos, no firmados o no guardados) y el listado de contratos vigentes "
-            "de los trabajadores?"
-        ),
-        "tipo": "si_no_detalle",
-        "reglas": (
-            "Sí/No válido. Si no toca hoy (no es día de reporte semanal), "
-            "'No aplica hoy / no es día de reporte semanal' ES válido."
-        ),
-    },
-    {
         "key": "q5",
         "texto": (
             "¿Se llamó a los clientes visitados por José hace 7 días para ofrecerles el 15% "
