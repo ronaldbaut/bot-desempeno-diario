@@ -8,18 +8,20 @@ from openai import OpenAI
 import json
 import re
 
+from metas_reporte import (
+    TIPO_RENDIMIENTO_CREMA,
+    clasificar_rendimiento_crema,
+    exportar_evaluacion,
+    items_personas_tania,
+)
+
 print(">>> Iniciando bot de desempeño diario...")
 
 # ==================== CONFIGURACIÓN ====================
 TOKEN = os.getenv("TOKEN")
 CHANNEL_ID_STR = os.getenv("CHANNEL_ID")
-
-if not TOKEN:
-    raise RuntimeError("❌ ERROR: Falta la variable de entorno TOKEN en Railway")
-if not CHANNEL_ID_STR:
-    raise RuntimeError("❌ ERROR: Falta la variable de entorno CHANNEL_ID en Railway")
-
-CHANNEL_ID = int(CHANNEL_ID_STR)
+# Se valida al arrancar (main). Importar el módulo para pruebas no exige credenciales.
+CHANNEL_ID = int(CHANNEL_ID_STR) if CHANNEL_ID_STR else None
 TZ = ZoneInfo("America/Caracas")
 
 intents = discord.Intents.default()
@@ -27,10 +29,18 @@ intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-client = OpenAI(
-    api_key=os.getenv("XAI_API_KEY"),
-    base_url="https://api.x.ai/v1",
-)
+_grok = None
+
+
+def _grok_client():
+    """Cliente xAI. No se crea al importar, para poder probar el flujo sin credenciales."""
+    global _grok
+    if _grok is None:
+        _grok = OpenAI(
+            api_key=os.getenv("XAI_API_KEY"),
+            base_url="https://api.x.ai/v1",
+        )
+    return _grok
 
 # reports[user_id] = { team, date, answers, buffer, active }
 reports = {}
@@ -40,148 +50,9 @@ class ReporteCancelado(Exception):
     pass
 
 
-# ==================== TRABAJADORES DE PRODUCCIÓN ====================
-# Metas diarias tomadas del Cuadro de Mando Integral (KPIs).
-# El bot las recuerda y Tania responde si esa persona las cumplió todas.
-
-META_ASISTENCIA = (
-    "Asistencia y puntualidad: llegó a la hora acordada y registró huella "
-    "al entrar y al salir."
-)
-META_ASISTENCIA_ENVASADO = (
-    META_ASISTENCIA + " En turno de envasado el día solo cuenta si también "
-    "se cumplió el tiempo de envasado."
-)
-META_ENVASADO = (
-    "Tiempo de envasado (turno tarde): 14 segundos por vasito con 4 trabajadores, "
-    "18 s con 3, o 26 s con 2."
-)
-META_CIERRE = (
-    "Protocolo diario de cierre (turno tarde): se cumplió el 100% y se envió "
-    "toda la información solicitada."
-)
-META_ALISTAMIENTO_TARDE = (
-    "Alistamiento de pedidos (turno tarde): pedidos del día siguiente completos "
-    "y sin errores (no cuenta si se alistaron el mismo día o a medias)."
-)
-META_TIEMPO_BATIDA = (
-    "Tiempo de producción por batida (turno mañana): promedio de 30 minutos o menos."
-)
-META_PROTOCOLO_BATIDORAS = (
-    "Protocolo de encendido y apagado de las batidoras (turno mañana), "
-    "reportando todo lo solicitado."
-)
-META_AGUA_SAL = (
-    "Agua sal de las batidoras (turno mañana): máximo 1 cambio por batidora "
-    "cada dos meses. Si hoy hubo cambio, debe reportarse."
-)
-
-REGLAS_CUMPLIMIENTO_TRABAJADOR = (
-    "Sí/No válido. 'Sí' = cumplió todas las metas que aplicaron hoy. "
-    "'No' ES válido y puede indicar cuáles no cumplió "
-    "(ej. 'No, llegó tarde' / 'No, se pasaron en envasado'). "
-    "'No vino' / 'No trabajó' / 'N/A' / 'No aplica' ES válido si no correspondía el día "
-    "o no hubo producción en su turno. "
-    "Detalle es bienvenido pero no obligatorio si dice sí o no con claridad."
-)
-
-
-def _pregunta_cumplimiento(nombre: str, metas: list[str]) -> str:
-    bullets = "\n".join(f"• {m}" for m in metas)
-    return (
-        f"**Metas de {nombre} hoy:**\n"
-        f"{bullets}\n\n"
-        f"¿{nombre} cumplió **todas** estas metas hoy?"
-    )
-
-
-TRABAJADORES_PRODUCCION = [
-    {
-        "key": "adrian_l",
-        "nombre": "Adrián L.",
-        "metas": [
-            META_ASISTENCIA_ENVASADO,
-            META_TIEMPO_BATIDA,
-            META_PROTOCOLO_BATIDORAS,
-            META_AGUA_SAL,
-            META_ENVASADO,
-            META_ALISTAMIENTO_TARDE,
-            META_CIERRE,
-        ],
-    },
-    {
-        "key": "angel_l",
-        "nombre": "Ángel L.",
-        "metas": [
-            META_ASISTENCIA_ENVASADO,
-            META_ENVASADO,
-            META_ALISTAMIENTO_TARDE,
-            META_CIERRE,
-        ],
-    },
-    {
-        "key": "jose_m_p",
-        "nombre": "José M. P.",
-        "metas": [
-            META_ASISTENCIA_ENVASADO,
-            META_ENVASADO,
-            META_ALISTAMIENTO_TARDE,
-            META_CIERRE,
-        ],
-    },
-    {
-        "key": "luis_p",
-        "nombre": "Luis P.",
-        "metas": [
-            META_ASISTENCIA_ENVASADO,
-            META_TIEMPO_BATIDA,
-            META_ENVASADO,
-            META_ALISTAMIENTO_TARDE,
-            META_CIERRE,
-        ],
-    },
-    {
-        "key": "maria_r",
-        "nombre": "María R.",
-        "metas": [
-            META_ASISTENCIA,
-            (
-                "Licuadas y alistamiento de materiales (turno mañana): las batidas "
-                "del día sin errores de fórmula, tanto en la preparación de las "
-                "licuadas como en el alistamiento de los materiales."
-            ),
-        ],
-    },
-    {
-        "key": "margaret_m",
-        "nombre": "Margaret M.",
-        "metas": [
-            META_ASISTENCIA,
-            (
-                "Implementos listos para la siguiente jornada: vasitos, tapitas y "
-                "complementos separados, contados y ubicados en su lugar antes de "
-                "terminar, para que la producción no se detenga al día siguiente."
-            ),
-            (
-                "Reporte diario de materia prima: inventario inicial y final en bultos, "
-                "consumo de adicionales e insumos próximos a agotarse, enviado "
-                "completo el mismo día (no al día siguiente)."
-            ),
-        ],
-    },
-    {
-        "key": "yuselis_m",
-        "nombre": "Yuselis M.",
-        "metas": [
-            META_ASISTENCIA_ENVASADO,
-            META_PROTOCOLO_BATIDORAS,
-            META_AGUA_SAL,
-            META_ENVASADO,
-            META_ALISTAMIENTO_TARDE,
-            META_CIERRE,
-        ],
-    },
-]
+# Personas y metas del reporte Tania: metas_reporte.py
+# Yuselis queda fuera de los reportes nuevos. Karina usa las metas de María.
+# La pregunta de rendimiento de crema tiene polaridad propia.
 
 
 # ==================== PREGUNTAS TANIA ====================
@@ -202,16 +73,7 @@ TANIA_FLOW = [
         "tipo": "si_no",
         "reglas": "Sí/No / 'hubo' / 'no hubo' son válidos. Es la pregunta de bifurcación.",
     },
-    *[
-        {
-            "key": t["key"],
-            "texto": _pregunta_cumplimiento(t["nombre"], t["metas"]),
-            "tipo": "si_no_detalle",
-            "reglas": REGLAS_CUMPLIMIENTO_TRABAJADOR,
-            "trabajador": t["nombre"],
-        }
-        for t in TRABAJADORES_PRODUCCION
-    ],
+    *items_personas_tania(),
     {
         "key": "incidencia",
         "texto": "¿Hubo alguna incidencia, problema o área de mejora hoy?",
@@ -473,7 +335,7 @@ Responde ÚNICAMENTE JSON:
 Principios:
 1. Sé RAZONABLE. Muchas preguntas son de sí/no: "Si", "No", "Sí", "si" SON válidas.
 2. "No" / "Ninguna" / "Nada" en incidencias o comentarios finales ES válido.
-3. Respuestas matizadas ("Sí, pero Yuselis llegó tarde") SON válidas.
+3. Respuestas matizadas ("Sí, pero llegó tarde") SON válidas.
 4. NO exijas copiar la pregunta ni un ensayo. Un dato claro basta.
 5. Evalúa BUFFER + respuesta nueva juntos (no pidas de nuevo lo ya dicho).
 6. Español informal y typos OK.
@@ -505,7 +367,7 @@ Respuesta NUEVA:
 """
 
     try:
-        response = client.chat.completions.create(
+        response = _grok_client().chat.completions.create(
             model="grok-4-1-fast",
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -571,8 +433,24 @@ async def obtener_respuesta(channel, user, pregunta_item: dict) -> tuple[str, di
             )
             continue
 
-        # Atajo local para sí/no claros (ahorra tokens y evita rechazos absurdos)
         tipo = pregunta_item.get("tipo")
+        # Rendimiento de crema: no usar el atajo Sí/No. Un «No» sin causa
+        # atribuible al turno de mañana queda pendiente, no es incumplimiento.
+        if tipo == TIPO_RENDIMIENTO_CREMA:
+            final = (buffer + "\n" + contenido).strip() if buffer else contenido
+            polaridad = clasificar_rendimiento_crema(final)
+            try:
+                await msg.add_reaction("✅")
+            except Exception:
+                pass
+            return final, {
+                "respuesta_valida": True,
+                "mensaje": None,
+                "interpretacion_si_no": None,
+                "polaridad": polaridad,
+            }
+
+        # Atajo local para sí/no claros (ahorra tokens y evita rechazos absurdos)
         if tipo in {"si_no", "si_no_detalle"} and _es_na(contenido) and len(contenido) <= 80:
             try:
                 await msg.add_reaction("✅")
@@ -660,6 +538,14 @@ async def ask_flow(channel, user, flow: list, hubo_produccion: bool | None = Non
 
         texto, decision = await obtener_respuesta(channel, user, item)
         data["answers"][item["key"]] = texto
+        if item.get("tipo") == TIPO_RENDIMIENTO_CREMA:
+            # La polaridad no reescribe el texto. Solo se anota para este reporte.
+            data["evaluacion_rendimiento_crema"] = exportar_evaluacion(data["answers"])[
+                "evaluacion_rendimiento_crema"
+            ]
+            decision["polaridad"] = data["evaluacion_rendimiento_crema"][item["key"]][
+                "polaridad"
+            ]
 
         # Bifurcación producción (pregunta 2 de Tania)
         if item["key"] == "produccion":
@@ -683,7 +569,9 @@ async def ask_flow(channel, user, flow: list, hubo_produccion: bool | None = Non
     await channel.send(f"✅ **Reporte {data['team'].upper()} completado. ¡Gracias!**")
     print(
         f"[DESEMPEÑO OK] team={data['team']} user={user.id} "
-        f"answers={json.dumps(data['answers'], ensure_ascii=False)}"
+        f"answers={json.dumps(data['answers'], ensure_ascii=False)} "
+        f"evaluacion_rendimiento_crema="
+        f"{json.dumps(data.get('evaluacion_rendimiento_crema') or {}, ensure_ascii=False)}"
     )
     if user.id in reports:
         del reports[user.id]
@@ -805,4 +693,17 @@ async def reporte_ronald(interaction: discord.Interaction):
 
 
 # ==================== INICIO ====================
-bot.run(TOKEN)
+def main():
+    global CHANNEL_ID
+    token = os.getenv("TOKEN")
+    channel_id_str = os.getenv("CHANNEL_ID")
+    if not token:
+        raise RuntimeError("❌ ERROR: Falta la variable de entorno TOKEN en Railway")
+    if not channel_id_str:
+        raise RuntimeError("❌ ERROR: Falta la variable de entorno CHANNEL_ID en Railway")
+    CHANNEL_ID = int(channel_id_str)
+    bot.run(token)
+
+
+if __name__ == "__main__":
+    main()
