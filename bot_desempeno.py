@@ -76,6 +76,17 @@ META_AGUA_SAL = (
     "cada dos meses. Si hoy hubo cambio, debe reportarse."
 )
 
+# Misma lista para María (Rosario) y Karina: mismas metas, misma pregunta
+# y la misma regla de sí/no. No se copia de Notion en cada arranque.
+METAS_MARIA_ROSARIO = [
+    META_ASISTENCIA,
+    (
+        "Licuadas y alistamiento de materiales (turno mañana): las batidas "
+        "del día sin errores de fórmula, tanto en la preparación de las "
+        "licuadas como en el alistamiento de los materiales."
+    ),
+]
+
 REGLAS_CUMPLIMIENTO_TRABAJADOR = (
     "Sí/No válido. 'Sí' = cumplió todas las metas que aplicaron hoy. "
     "'No' ES válido y puede indicar cuáles no cumplió "
@@ -141,16 +152,10 @@ TRABAJADORES_PRODUCCION = [
         ],
     },
     {
+        # María del Rosario Reverón Caicedo. En la operación se le dice Rosario.
         "key": "maria_r",
         "nombre": "María R.",
-        "metas": [
-            META_ASISTENCIA,
-            (
-                "Licuadas y alistamiento de materiales (turno mañana): las batidas "
-                "del día sin errores de fórmula, tanto en la preparación de las "
-                "licuadas como en el alistamiento de los materiales."
-            ),
-        ],
+        "metas": METAS_MARIA_ROSARIO,
     },
     {
         "key": "margaret_m",
@@ -170,18 +175,29 @@ TRABAJADORES_PRODUCCION = [
         ],
     },
     {
-        "key": "yuselis_m",
-        "nombre": "Yuselis M.",
-        "metas": [
-            META_ASISTENCIA_ENVASADO,
-            META_PROTOCOLO_BATIDORAS,
-            META_AGUA_SAL,
-            META_ENVASADO,
-            META_ALISTAMIENTO_TARDE,
-            META_CIERRE,
-        ],
+        "key": "karina_r",
+        "nombre": "Karina R.",
+        "metas": METAS_MARIA_ROSARIO,
     },
 ]
+
+
+# Yuselis ya no trabaja. No entra en TRABAJADORES_PRODUCCION ni en reportes
+# nuevos. Las respuestas ya dadas siguen en el historial de Discord y en los
+# logs de Railway, bajo la clave yuselis_m. Este bot no guarda una base de
+# datos: no hay filas que borrar ni recalcular.
+YUSELIS_HISTORICA = {
+    "key": "yuselis_m",
+    "nombre": "Yuselis M.",
+    "metas": [
+        META_ASISTENCIA_ENVASADO,
+        META_PROTOCOLO_BATIDORAS,
+        META_AGUA_SAL,
+        META_ENVASADO,
+        META_ALISTAMIENTO_TARDE,
+        META_CIERRE,
+    ],
+}
 
 
 # ==================== PREGUNTAS TANIA ====================
@@ -805,4 +821,5 @@ async def reporte_ronald(interaction: discord.Interaction):
 
 
 # ==================== INICIO ====================
-bot.run(TOKEN)
+if __name__ == "__main__":
+    bot.run(TOKEN)
