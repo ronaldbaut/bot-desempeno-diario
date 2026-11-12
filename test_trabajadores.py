@@ -45,7 +45,7 @@ class TrabajadoresProduccionTest(unittest.TestCase):
         self.assertEqual(karina["nombre"], "Karina R.")
         self.assertIs(karina["metas"], maria["metas"])
         self.assertEqual(karina["metas"], bot.METAS_MARIA_ROSARIO)
-        self.assertEqual(len(karina["metas"]), 2)
+        self.assertEqual(len(karina["metas"]), 4)
 
         pregunta_maria = bot._pregunta_cumplimiento(maria["nombre"], maria["metas"])
         pregunta_karina = bot._pregunta_cumplimiento(karina["nombre"], karina["metas"])
@@ -83,6 +83,7 @@ class TrabajadoresProduccionTest(unittest.TestCase):
                 bot.META_ENVASADO,
                 bot.META_ALISTAMIENTO_TARDE,
                 bot.META_CIERRE,
+                bot.META_CUOTA_VASITOS,
             ],
         )
         self.assertEqual(
@@ -92,6 +93,7 @@ class TrabajadoresProduccionTest(unittest.TestCase):
                 bot.META_ENVASADO,
                 bot.META_ALISTAMIENTO_TARDE,
                 bot.META_CIERRE,
+                bot.META_CUOTA_VASITOS,
             ],
         )
         self.assertEqual(por_clave["jose_m_p"], por_clave["angel_l"])
@@ -103,6 +105,7 @@ class TrabajadoresProduccionTest(unittest.TestCase):
                 bot.META_ENVASADO,
                 bot.META_ALISTAMIENTO_TARDE,
                 bot.META_CIERRE,
+                bot.META_CUOTA_VASITOS,
             ],
         )
         self.assertEqual(
@@ -119,8 +122,85 @@ class TrabajadoresProduccionTest(unittest.TestCase):
                     "consumo de adicionales e insumos próximos a agotarse, enviado "
                     "completo el mismo día (no al día siguiente)."
                 ),
+                bot.META_CUOTA_VASITOS,
             ],
         )
+
+    def test_area_limpia_solo_para_maria_y_karina(self):
+        texto = (
+            "Área de producción limpia: dejaron toda el área de producción limpia, "
+            "incluyendo implementos, licuadoras, pesos, mesón, estantes congeladores "
+            "y otros utensilios usados para la producción."
+        )
+        self.assertEqual(bot.META_AREA_LIMPIA, texto)
+        self.assertEqual(
+            bot.METAS_MARIA_ROSARIO,
+            [
+                bot.META_ASISTENCIA,
+                (
+                    "Licuadas y alistamiento de materiales (turno mañana): las batidas "
+                    "del día sin errores de fórmula, tanto en la preparación de las "
+                    "licuadas como en el alistamiento de los materiales."
+                ),
+                bot.META_AREA_LIMPIA,
+                bot.META_CUOTA_VASITOS,
+            ],
+        )
+        por_clave = {t["key"]: t["metas"] for t in bot.TRABAJADORES_PRODUCCION}
+        for key in ("maria_r", "karina_r"):
+            self.assertIn(bot.META_AREA_LIMPIA, por_clave[key])
+            item = next(i for i in bot.TANIA_FLOW if i["key"] == key)
+            self.assertIn(f"• {texto}", item["texto"])
+        for key in ("adrian_l", "angel_l", "jose_m_p", "luis_p", "margaret_m"):
+            self.assertNotIn(bot.META_AREA_LIMPIA, por_clave[key])
+            item = next(i for i in bot.TANIA_FLOW if i["key"] == key)
+            self.assertNotIn(texto, item["texto"])
+        self.assertNotIn(bot.META_AREA_LIMPIA, bot.YUSELIS_HISTORICA["metas"])
+        ronald = "\n".join(item["texto"] for item in bot.RONALD_FLOW)
+        self.assertNotIn(texto, ronald)
+
+    def test_cuota_de_vasitos_en_todos_los_activos(self):
+        texto = (
+            "Cuota de vasitos: cumplieron con la cuota de vasitos planificada para el día."
+        )
+        self.assertEqual(bot.META_CUOTA_VASITOS, texto)
+        claves = [t["key"] for t in bot.TRABAJADORES_PRODUCCION]
+        self.assertEqual(
+            claves,
+            [
+                "adrian_l",
+                "angel_l",
+                "jose_m_p",
+                "luis_p",
+                "maria_r",
+                "margaret_m",
+                "karina_r",
+            ],
+        )
+        for trabajador in bot.TRABAJADORES_PRODUCCION:
+            self.assertEqual(trabajador["metas"][-1], bot.META_CUOTA_VASITOS)
+            item = next(i for i in bot.TANIA_FLOW if i["key"] == trabajador["key"])
+            self.assertIn(f"• {texto}", item["texto"])
+            self.assertEqual(item["tipo"], "si_no_detalle")
+            self.assertEqual(item["reglas"], bot.REGLAS_CUMPLIMIENTO_TRABAJADOR)
+        self.assertNotIn(bot.META_CUOTA_VASITOS, bot.YUSELIS_HISTORICA["metas"])
+        ronald = "\n".join(item["texto"] for item in bot.RONALD_FLOW)
+        self.assertNotIn(texto, ronald)
+        margaret = next(
+            t for t in bot.TRABAJADORES_PRODUCCION if t["key"] == "margaret_m"
+        )
+        preparacion = next(
+            m for m in margaret["metas"] if m.startswith("Implementos listos")
+        )
+        self.assertEqual(
+            preparacion,
+            (
+                "Implementos listos para la siguiente jornada: vasitos, tapitas y "
+                "complementos separados, contados y ubicados en su lugar antes de "
+                "terminar, para que la producción no se detenga al día siguiente."
+            ),
+        )
+        self.assertNotEqual(preparacion, bot.META_CUOTA_VASITOS)
 
     def test_orden_del_reporte_de_tania_y_ronald_intacto(self):
         self.assertEqual(

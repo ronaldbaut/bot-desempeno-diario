@@ -75,6 +75,14 @@ META_AGUA_SAL = (
     "Agua sal de las batidoras (turno mañana): máximo 1 cambio por batidora "
     "cada dos meses. Si hoy hubo cambio, debe reportarse."
 )
+META_AREA_LIMPIA = (
+    "Área de producción limpia: dejaron toda el área de producción limpia, "
+    "incluyendo implementos, licuadoras, pesos, mesón, estantes congeladores "
+    "y otros utensilios usados para la producción."
+)
+META_CUOTA_VASITOS = (
+    "Cuota de vasitos: cumplieron con la cuota de vasitos planificada para el día."
+)
 
 # Misma lista para María (Rosario) y Karina: mismas metas, misma pregunta
 # y la misma regla de sí/no. No se copia de Notion en cada arranque.
@@ -85,6 +93,8 @@ METAS_MARIA_ROSARIO = [
         "del día sin errores de fórmula, tanto en la preparación de las "
         "licuadas como en el alistamiento de los materiales."
     ),
+    META_AREA_LIMPIA,
+    META_CUOTA_VASITOS,
 ]
 
 REGLAS_CUMPLIMIENTO_TRABAJADOR = (
@@ -118,6 +128,7 @@ TRABAJADORES_PRODUCCION = [
             META_ENVASADO,
             META_ALISTAMIENTO_TARDE,
             META_CIERRE,
+            META_CUOTA_VASITOS,
         ],
     },
     {
@@ -128,6 +139,7 @@ TRABAJADORES_PRODUCCION = [
             META_ENVASADO,
             META_ALISTAMIENTO_TARDE,
             META_CIERRE,
+            META_CUOTA_VASITOS,
         ],
     },
     {
@@ -138,6 +150,7 @@ TRABAJADORES_PRODUCCION = [
             META_ENVASADO,
             META_ALISTAMIENTO_TARDE,
             META_CIERRE,
+            META_CUOTA_VASITOS,
         ],
     },
     {
@@ -149,6 +162,7 @@ TRABAJADORES_PRODUCCION = [
             META_ENVASADO,
             META_ALISTAMIENTO_TARDE,
             META_CIERRE,
+            META_CUOTA_VASITOS,
         ],
     },
     {
@@ -172,6 +186,7 @@ TRABAJADORES_PRODUCCION = [
                 "consumo de adicionales e insumos próximos a agotarse, enviado "
                 "completo el mismo día (no al día siguiente)."
             ),
+            META_CUOTA_VASITOS,
         ],
     },
     {
